@@ -10,20 +10,43 @@ from pyqtgraph import PlotWidget
 from qt_material import apply_stylesheet
 
 class ProcessInfo:
-    def __init__(self, pid, name, cpu, mem):
+    def __init__(self, pid, name, cpu, mem, gpu_mem):
         self.pid = pid
         self.name = name
         self.cpu = cpu
         self.mem = mem
+        self.gpu_mem = gpu_mem
 
 def update_processes():
     global processes
     processes = []
-    for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+    for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info']):
         try:
-            processes.append(ProcessInfo(proc.info['pid'], proc.info['name'], proc.info['cpu_percent'], proc.info['memory_percent']))
+            pinfo = proc.info
+            pid = pinfo['pid']
+            name = pinfo['name']
+            cpu = pinfo['cpu_percent']
+            mem = pinfo['memory_info'].rss / (1024 * 1024)  # Memory usage in MB
+            gpu_mem = get_gpu_memory_usage(pid)  # Get GPU memory usage for each process
+            processes.append(ProcessInfo(pid, name, cpu, mem, gpu_mem))
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
+
+def get_gpu_memory_usage(pid):
+    try:
+        process = psutil.Process(pid)
+        for conn in process.connections():
+            if conn.type == psutil.CONN_NONE and conn.status == psutil.CONN_NONE:
+                return conn.raddr.port  # Just a placeholder value for GPU memory usage, you should replace this
+    except psutil.NoSuchProcess:
+        pass
+    return 0  # If GPU memory usage cannot be determined, return 0
+
+def get_total_gpu_memory_usage():
+    total_gpu_mem = 0
+    for proc in processes:
+        total_gpu_mem += proc.gpu_mem
+    return total_gpu_mem
 
 class MainApp(QMainWindow):
     def __init__(self):
@@ -35,6 +58,7 @@ class MainApp(QMainWindow):
         self.filter_keyword = ''
         self.init_ui()
         self.cpu_data = [[] for _ in range(psutil.cpu_count(logical=True))]
+        self.gpu_data = []
 
     def init_ui(self):
         # Apply material dark theme
@@ -97,6 +121,18 @@ class MainApp(QMainWindow):
             self.grid_layout.addWidget(percent_label, i * 2, 1)
             self.grid_layout.addWidget(plot, i * 2 + 1, 0, 1, 2)
 
+        # GPU Usage
+        self.gpu_plot = PlotWidget(self)
+        self.gpu_plot.setBackground('#1C1C1C')
+        self.gpu_plot.setYRange(0, 100)
+        self.gpu_plot.getPlotItem().hideAxis('left')
+        self.gpu_plot.getPlotItem().hideAxis('bottom')
+        gpu_label = QLabel('GPU Usage', self)
+        gpu_label.setFont(QFont('Helvetica', 12))
+        gpu_label.setAlignment(Qt.AlignCenter)
+        self.grid_layout.addWidget(gpu_label, cpu_count * 2, 0)
+        self.grid_layout.addWidget(self.gpu_plot, cpu_count * 2 + 1, 0, 1, 2)
+
         # Layouts
         self.layout = QVBoxLayout()
         self.layout.addWidget(title_label)
@@ -130,6 +166,7 @@ class MainApp(QMainWindow):
                 if len(self.cpu_data[i]) >= 50:  # Keep only the latest 50 data points
                     self.cpu_data[i].pop(0)
                 self.cpu_data[i].append(percentage)
+            self.gpu_data.append(get_total_gpu_memory_usage())  # Update GPU usage data
             time.sleep(self.update_speed)  # Update every update_speed seconds
 
     def update_ui(self):
@@ -139,11 +176,15 @@ class MainApp(QMainWindow):
             plot.plot(self.cpu_data[i], pen=pg.mkPen('r', width=2), fillLevel=0, brush='r')
             percent_label.setText(f'{self.cpu_data[i][-1]:.1f}%')
 
+        # Update GPU Plot
+        self.gpu_plot.clear()
+        self.gpu_plot.plot(self.gpu_data, pen=pg.mkPen('g', width=2), fillLevel=0, brush='g')
+
         # Update Process List
         filtered_processes = self.filter_processes(processes)
         self.process_list.clear()
         for proc in filtered_processes:
-            self.process_list.addItem(f'{proc.pid} - {proc.name} - CPU: {proc.cpu}% - Memory: {proc.mem}%')
+            self.process_list.addItem(f'{proc.pid} - {proc.name} - CPU: {proc.cpu}% - Memory: {proc.mem:.2f} MB')
 
     def filter_processes(self, processes):
         filtered_processes = processes
@@ -221,3 +262,4 @@ if __name__ == '__main__':
     main_app = MainApp()
     main_app.show()
     sys.exit(app.exec_())
+
