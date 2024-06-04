@@ -59,6 +59,9 @@ class MainApp(QMainWindow):
         self.init_ui()
         self.cpu_data = [[] for _ in range(psutil.cpu_count(logical=True))]
         self.gpu_data = []
+        self.net_sent_data = []
+        self.net_recv_data = []
+        self.prev_net_io = psutil.net_io_counters()
 
     def init_ui(self):
         # Apply material dark theme
@@ -133,6 +136,30 @@ class MainApp(QMainWindow):
         self.grid_layout.addWidget(gpu_label, cpu_count * 2, 0)
         self.grid_layout.addWidget(self.gpu_plot, cpu_count * 2 + 1, 0, 1, 2)
 
+        # Network I/O
+        self.net_sent_plot = PlotWidget(self)
+        self.net_sent_plot.setBackground('#1C1C1C')
+        self.net_sent_plot.setYRange(0, 100)
+        self.net_sent_plot.getPlotItem().hideAxis('left')
+        self.net_sent_plot.getPlotItem().hideAxis('bottom')
+        net_sent_label = QLabel('Network Sent (KB/s)', self)
+        net_sent_label.setFont(QFont('Helvetica', 12))
+        net_sent_label.setAlignment(Qt.AlignCenter)
+
+        self.net_recv_plot = PlotWidget(self)
+        self.net_recv_plot.setBackground('#1C1C1C')
+        self.net_recv_plot.setYRange(0, 100)
+        self.net_recv_plot.getPlotItem().hideAxis('left')
+        self.net_recv_plot.getPlotItem().hideAxis('bottom')
+        net_recv_label = QLabel('Network Received (KB/s)', self)
+        net_recv_label.setFont(QFont('Helvetica', 12))
+        net_recv_label.setAlignment(Qt.AlignCenter)
+
+        self.grid_layout.addWidget(net_sent_label, cpu_count * 2 + 2, 0)
+        self.grid_layout.addWidget(self.net_sent_plot, cpu_count * 2 + 3, 0, 1, 2)
+        self.grid_layout.addWidget(net_recv_label, cpu_count * 2 + 4, 0)
+        self.grid_layout.addWidget(self.net_recv_plot, cpu_count * 2 + 5, 0, 1, 2)
+
         # Layouts
         self.layout = QVBoxLayout()
         self.layout.addWidget(title_label)
@@ -166,19 +193,44 @@ class MainApp(QMainWindow):
                 if len(self.cpu_data[i]) >= 50:  # Keep only the latest 50 data points
                     self.cpu_data[i].pop(0)
                 self.cpu_data[i].append(percentage)
+            if len(self.gpu_data) >= 50:  # Keep only the latest 50 data points
+                self.gpu_data.pop(0)
             self.gpu_data.append(get_total_gpu_memory_usage())  # Update GPU usage data
+
+            net_io = psutil.net_io_counters()
+            net_sent = (net_io.bytes_sent - self.prev_net_io.bytes_sent) / 1024  # Convert to KB
+            net_recv = (net_io.bytes_recv - self.prev_net_io.bytes_recv) / 1024  # Convert to KB
+            self.prev_net_io = net_io
+
+            if len(self.net_sent_data) >= 50:
+                self.net_sent_data.pop(0)
+            if len(self.net_recv_data) >= 50:
+                self.net_recv_data.pop(0)
+            self.net_sent_data.append(net_sent)
+            self.net_recv_data.append(net_recv)
+
             time.sleep(self.update_speed)  # Update every update_speed seconds
 
     def update_ui(self):
         # Update CPU Plots and Labels
         for i, (plot, percent_label) in enumerate(zip(self.cpu_plots, self.cpu_percent_labels)):
-            plot.clear()
-            plot.plot(self.cpu_data[i], pen=pg.mkPen('r', width=2), fillLevel=0, brush='r')
-            percent_label.setText(f'{self.cpu_data[i][-1]:.1f}%')
+            if self.cpu_data[i]:
+                plot.clear()
+                plot.plot(self.cpu_data[i], pen=pg.mkPen('r', width=2), fillLevel=0, brush='r')
+                percent_label.setText(f'{self.cpu_data[i][-1]:.1f}%')
 
         # Update GPU Plot
-        self.gpu_plot.clear()
-        self.gpu_plot.plot(self.gpu_data, pen=pg.mkPen('g', width=2), fillLevel=0, brush='g')
+        if self.gpu_data:
+            self.gpu_plot.clear()
+            self.gpu_plot.plot(self.gpu_data, pen=pg.mkPen('g', width=2), fillLevel=0, brush='g')
+
+        # Update Network Plots
+        if self.net_sent_data:
+            self.net_sent_plot.clear()
+            self.net_sent_plot.plot(self.net_sent_data, pen=pg.mkPen('b', width=2), fillLevel=0, brush='b')
+        if self.net_recv_data:
+            self.net_recv_plot.clear()
+            self.net_recv_plot.plot(self.net_recv_data, pen=pg.mkPen('c', width=2), fillLevel=0, brush='c')
 
         # Update Process List
         filtered_processes = self.filter_processes(processes)
@@ -215,12 +267,11 @@ class MainApp(QMainWindow):
     def kill_process(self):
         selected_item = self.process_list.currentItem()
         if selected_item:
-            selected_index = self.process_list.indexFromItem(selected_item).row()
-            selected_proc = processes[selected_index]
+            selected_pid = int(selected_item.text().split(' - ')[0])
             try:
-                proc = psutil.Process(selected_proc.pid)
+                proc = psutil.Process(selected_pid)
                 proc.kill()
-                print(f"Killed process with PID {selected_proc.pid}")
+                print(f"Killed process with PID {selected_pid}")
             except Exception as e:
                 print(f"Failed to kill process: {e}")
 
@@ -262,4 +313,3 @@ if __name__ == '__main__':
     main_app = MainApp()
     main_app.show()
     sys.exit(app.exec_())
-
